@@ -2,6 +2,8 @@ package com.valhalla.command.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.valhalla.command.ValhallaCommand;
+import com.valhalla.command.network.WheelCommandPayload;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
@@ -35,13 +37,20 @@ public class CommandWheelScreen extends Screen {
 	private static final int TEX = 512;
 	private static final Identifier[] SEG_TEX = new Identifier[SEGMENTS];
 	private static final Identifier[] SEG_HOVER_TEX = new Identifier[SEGMENTS];
+	private static final Identifier[] SEG_GREY_TEX = new Identifier[SEGMENTS];
 	private static final Identifier CENTER_TEX = tex("center");
 	static {
 		for (int i = 0; i < SEGMENTS; i++) {
 			SEG_TEX[i] = tex("seg" + i);
 			SEG_HOVER_TEX[i] = tex("seg" + i + "_hover");
+			SEG_GREY_TEX[i] = tex("seg" + i + "_grey");
 		}
 	}
+
+	/** These commands only work during a fight; greyed out otherwise. */
+	private static final boolean[] NEEDS_FIGHT = { false, true, false, true, true, true };
+	private static final float ICON_SCALE = 1.5f;
+	private static final int COLOR_TEXT_DISABLED = 0xFF8A8A8A;
 
 	// ---- Look & feel (sizes in GUI units) ----
 	private static final float WHEEL_SIZE = 190f;    // full diameter of the artwork
@@ -136,21 +145,30 @@ public class CommandWheelScreen extends Screen {
 			pose.translate((float) Math.cos(mid) * push, (float) Math.sin(mid) * push);
 			pose.scale(grow, grow);
 
-			// Normal section, with the brighter hover version faded in on top
-			drawTex(graphics, SEG_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha));
+			boolean disabled = isDisabled(i);
+
+			// Normal section (or greyed out), with the brighter hover version faded in on top
+			drawTex(graphics, disabled ? SEG_GREY_TEX[i] : SEG_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha));
 			if (h > 0.01f) drawTex(graphics, SEG_HOVER_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha * h));
 
 			// Icon with its name underneath, in the Minecraft font
 			if (alpha > 0.6f) {
 				float labelR = LABEL_RADIUS * size;
-				float iconScale = scale * (1f + 0.15f * h);
 				pose.translate((float) Math.cos(mid) * labelR, (float) Math.sin(mid) * labelR);
+				pose.scale(scale, scale); // back to GUI units
+
+				pose.pushMatrix();
+				pose.translate(0f, -5f);
+				float iconScale = ICON_SCALE * (1f + 0.15f * h);
 				pose.scale(iconScale, iconScale);
-				graphics.fakeItem(ICONS[i], -8, -13);
+				graphics.fakeItem(ICONS[i], -8, -8);
+				pose.popMatrix();
+
 				String label = COMMANDS[i];
 				int tw = this.font.width(label);
-				int textColor = withAlpha(lerpColor(COLOR_TEXT, 0xFFFFF3C4, h), alpha);
-				graphics.text(this.font, label, -tw / 2, 5, textColor, true);
+				int base = disabled ? COLOR_TEXT_DISABLED : COLOR_TEXT;
+				int textColor = withAlpha(lerpColor(base, 0xFFFFF3C4, h), alpha);
+				graphics.text(this.font, label, -tw / 2, 9, textColor, !disabled);
 			}
 			pose.popMatrix();
 		}
@@ -179,14 +197,18 @@ public class CommandWheelScreen extends Screen {
 		double step = Math.PI * 2 / SEGMENTS;
 		double a = Math.atan2(y, x) + Math.PI / 2 + step / 2; // 0 = top, clockwise
 		a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-		return (int) (a / step) % SEGMENTS;
+		int seg = (int) (a / step) % SEGMENTS;
+		return isDisabled(seg) ? -1 : seg; // greyed sections can't be hovered or picked
+	}
+
+	private static boolean isDisabled(int i) {
+		return NEEDS_FIGHT[i] && !AttackTracker.isAttacking();
 	}
 
 	/** Called when the wheel closes. -1 means nothing was picked. */
 	private void onSelect(int index) {
 		if (index < 0) return;
-		// Placeholder until the army exists: show the order above the hotbar.
-		this.minecraft.gui.hud.setOverlayMessage(Component.literal("Order: " + COMMANDS[index]), false);
+		ClientPlayNetworking.send(new WheelCommandPayload(index));
 	}
 
 	private boolean isWheelKeyHeld() {
