@@ -1,44 +1,61 @@
 package com.valhalla.command.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.valhalla.command.ValhallaCommand;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import org.lwjgl.glfw.GLFW;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * The radial command wheel. Opens while the wheel key is held, closes on release.
- * Everything is drawn from scanline rectangles at real pixel resolution, so it
- * stays crisp at every GUI scale.
+ * Each section is its own texture (cut from the wheel artwork) so it can animate on its own.
  */
 public class CommandWheelScreen extends Screen {
-	// ---- Look & feel (all sizes in GUI units) ----
+	// ---- Commands, clockwise from the top ----
 	public static final String[] COMMANDS = {
-			"Follow", "Charge", "Attack", "Defend", "Hold", "Retreat", "Rally", "Spread"
+			"Follow", "Charge", "Attack", "Defend", "Hold", "Retreat"
+	};
+	private static final ItemStack[] ICONS = {
+			new ItemStack(Items.LEAD),          // Follow
+			new ItemStack(Items.IRON_AXE),      // Charge
+			new ItemStack(Items.IRON_SWORD),    // Attack
+			new ItemStack(Items.SHIELD),        // Defend
+			new ItemStack(Items.WHITE_BANNER),  // Hold
+			new ItemStack(Items.LEATHER_BOOTS)  // Retreat
 	};
 	private static final int SEGMENTS = COMMANDS.length;
-	private static final float OUTER_RADIUS = 92f;
-	private static final float INNER_RADIUS = 36f;
-	private static final float CENTER_RADIUS = 30f;
-	private static final float GAP = 3.5f;          // the "invisible line" between sections
-	private static final float HOVER_PUSH = 7f;     // how far a hovered section slides out
-	private static final float HOVER_GROW = 0.04f;  // how much a hovered section grows
 
-	private static final int COLOR_SEGMENT = 0xF0EDEDED;
-	private static final int COLOR_HOVER   = 0xFF5B8DB8; // icy steel blue
-	private static final int COLOR_CENTER  = 0xF0EDEDED;
-	private static final int COLOR_RING    = 0xFFEDEDED;
-	private static final int COLOR_TEXT    = 0xFF1A1A1A;
+	// ---- Textures (512x512, all aligned to the same canvas) ----
+	private static final int TEX = 512;
+	private static final Identifier[] SEG_TEX = new Identifier[SEGMENTS];
+	private static final Identifier[] SEG_HOVER_TEX = new Identifier[SEGMENTS];
+	private static final Identifier CENTER_TEX = tex("center");
+	static {
+		for (int i = 0; i < SEGMENTS; i++) {
+			SEG_TEX[i] = tex("seg" + i);
+			SEG_HOVER_TEX[i] = tex("seg" + i + "_hover");
+		}
+	}
+
+	// ---- Look & feel (sizes in GUI units) ----
+	private static final float WHEEL_SIZE = 190f;    // full diameter of the artwork
+	private static final float INNER_RADIUS = 30f;   // inside this = centre (no selection)
+	private static final float LABEL_RADIUS = 0.33f; // where icons sit, as a fraction of WHEEL_SIZE
+	private static final float HOVER_PUSH = 7f;
+	private static final float HOVER_GROW = 0.04f;
+	private static final int COLOR_TEXT = 0xFFFFFFFF;
 
 	// ---- Animation timings (ms) ----
 	private static final float OPEN_MS = 220f;
 	private static final float CLOSE_MS = 150f;
-	private static final float STAGGER_MS = 22f;
-	private static final float HOVER_SPEED = 14f; // higher = snappier hover in/out
+	private static final float STAGGER_MS = 28f;
+	private static final float HOVER_SPEED = 14f;
 
 	private final long openedAt = System.nanoTime();
 	private long closingAt = -1;
@@ -46,14 +63,12 @@ public class CommandWheelScreen extends Screen {
 	private final float[] hover = new float[SEGMENTS];
 	private int hovered = -1;
 
-	// Cached pixel geometry: per segment, flat arrays of {y, x1, x2} runs
-	private int[][] segmentRuns;
-	private int[] centerRuns;
-	private int[] ringRuns;
-	private float builtScale = -1;
-
 	public CommandWheelScreen() {
 		super(Component.literal("Command Wheel"));
+	}
+
+	private static Identifier tex(String name) {
+		return Identifier.fromNamespaceAndPath(ValhallaCommand.MOD_ID, "textures/gui/wheel/" + name + ".png");
 	}
 
 	@Override
@@ -72,10 +87,9 @@ public class CommandWheelScreen extends Screen {
 		float dt = Math.min((now - lastFrame) / 1_000_000_000f, 0.1f);
 		lastFrame = now;
 
+		// Real pixels per GUI unit, so the artwork is drawn at full resolution
 		float scale = (float) this.minecraft.getWindow().getWidth() / Math.max(1, this.width);
-		if (scale != builtScale) buildGeometry(scale);
 
-		// Close as soon as the key is let go
 		if (closingAt < 0 && !isWheelKeyHeld()) {
 			closingAt = now;
 			onSelect(hovered);
@@ -98,13 +112,14 @@ public class CommandWheelScreen extends Screen {
 		}
 
 		float closeEase = 1f - easeInCubic(closeT);
+		int size = Math.round(WHEEL_SIZE * scale);
+		int half = size / 2;
 
 		var pose = graphics.pose();
 		pose.pushMatrix();
-		pose.scale(1f / scale, 1f / scale);          // work in real pixels
+		pose.scale(1f / scale, 1f / scale);   // work in real pixels
 		pose.translate(cx * scale, cy * scale);
 
-		// ---- Segments ----
 		double step = Math.PI * 2 / SEGMENTS;
 		for (int i = 0; i < SEGMENTS; i++) {
 			float p = clamp01((openMs - i * STAGGER_MS) / OPEN_MS);
@@ -115,31 +130,47 @@ public class CommandWheelScreen extends Screen {
 			float h = hover[i];
 			double mid = -Math.PI / 2 + i * step;
 			float push = (HOVER_PUSH * h + (1f - closeEase) * 10f) * scale;
-			float dx = (float) Math.cos(mid) * push;
-			float dy = (float) Math.sin(mid) * push;
 			float grow = s * (1f + HOVER_GROW * h);
 
-			int color = withAlpha(lerpColor(COLOR_SEGMENT, COLOR_HOVER, h), alpha);
-
 			pose.pushMatrix();
-			pose.translate(dx, dy);
+			pose.translate((float) Math.cos(mid) * push, (float) Math.sin(mid) * push);
 			pose.scale(grow, grow);
-			drawRuns(graphics, segmentRuns[i], color);
+
+			// Normal section, with the brighter hover version faded in on top
+			drawTex(graphics, SEG_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha));
+			if (h > 0.01f) drawTex(graphics, SEG_HOVER_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha * h));
+
+			// Icon with its name underneath, in the Minecraft font
+			if (alpha > 0.6f) {
+				float labelR = LABEL_RADIUS * size;
+				float iconScale = scale * (1f + 0.15f * h);
+				pose.translate((float) Math.cos(mid) * labelR, (float) Math.sin(mid) * labelR);
+				pose.scale(iconScale, iconScale);
+				graphics.fakeItem(ICONS[i], -8, -13);
+				String label = COMMANDS[i];
+				int tw = this.font.width(label);
+				int textColor = withAlpha(lerpColor(COLOR_TEXT, 0xFFFFF3C4, h), alpha);
+				graphics.text(this.font, label, -tw / 2, 5, textColor, true);
+			}
 			pose.popMatrix();
 		}
 
-		// ---- Centre circle ----
+		// Centre shield boss
 		float cp = clamp01(openMs / (OPEN_MS * 0.8f));
 		float cs = easeOutBack(cp) * closeEase;
 		float ca = clamp01(cp * 2f) * closeEase;
 		if (cs > 0.01f) {
 			pose.pushMatrix();
 			pose.scale(cs, cs);
-			drawRuns(graphics, centerRuns, withAlpha(COLOR_CENTER, ca));
+			drawTex(graphics, CENTER_TEX, half, size, withAlpha(0xFFFFFFFF, ca));
 			pose.popMatrix();
 		}
 
 		pose.popMatrix();
+	}
+
+	private static void drawTex(GuiGraphicsExtractor g, Identifier id, int half, int size, int color) {
+		g.blit(RenderPipelines.GUI_TEXTURED, id, -half, -half, 0f, 0f, size, size, TEX, TEX, TEX, TEX, color);
 	}
 
 	/** Which section the mouse points at, or -1 for the centre. */
@@ -167,81 +198,6 @@ public class CommandWheelScreen extends Screen {
 			return GLFW.glfwGetMouseButton(handle, code) == GLFW.GLFW_PRESS;
 		}
 		return GLFW.glfwGetKey(handle, code) == GLFW.GLFW_PRESS;
-	}
-
-	// ---- Geometry ----
-
-	private void buildGeometry(float scale) {
-		builtScale = scale;
-		float outer = OUTER_RADIUS * scale, inner = INNER_RADIUS * scale;
-		float halfGap = GAP * scale / 2f;
-		double step = Math.PI * 2 / SEGMENTS;
-
-		List<List<Integer>> runs = new ArrayList<>();
-		for (int i = 0; i < SEGMENTS; i++) runs.add(new ArrayList<>());
-
-		int r = (int) Math.ceil(outer);
-		for (int y = -r; y <= r; y++) {
-			int runSeg = -1, runStart = 0;
-			for (int x = -r; x <= r + 1; x++) {
-				int seg = -1;
-				if (x <= r) {
-					float px = x + 0.5f, py = y + 0.5f;
-					float d2 = px * px + py * py;
-					if (d2 <= outer * outer && d2 >= inner * inner) {
-						double a = Math.atan2(py, px) + Math.PI / 2 + step / 2;
-						a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-						int s = (int) (a / step) % SEGMENTS;
-						double local = a - s * step;               // 0..step inside the section
-						double edge = Math.min(local, step - local); // angle to nearest border
-						double dist = Math.sqrt(d2) * Math.sin(edge);
-						if (dist >= halfGap) seg = s;
-					}
-				}
-				if (seg != runSeg) {
-					if (runSeg >= 0) {
-						List<Integer> l = runs.get(runSeg);
-						l.add(y); l.add(runStart); l.add(x);
-					}
-					runSeg = seg;
-					runStart = x;
-				}
-			}
-		}
-		segmentRuns = new int[SEGMENTS][];
-		for (int i = 0; i < SEGMENTS; i++) segmentRuns[i] = toArray(runs.get(i));
-		centerRuns = discRuns(CENTER_RADIUS * scale, 0);
-		ringRuns = discRuns(CENTER_RADIUS * scale, CENTER_RADIUS * scale - Math.max(1.5f, scale));
-	}
-
-	private static int[] discRuns(float outer, float inner) {
-		List<Integer> l = new ArrayList<>();
-		int r = (int) Math.ceil(outer);
-		for (int y = -r; y <= r; y++) {
-			float py = y + 0.5f;
-			if (py * py > outer * outer) continue;
-			int xo = (int) Math.floor(Math.sqrt(outer * outer - py * py));
-			if (inner <= 0 || py * py >= inner * inner) {
-				l.add(y); l.add(-xo); l.add(xo);
-			} else {
-				int xi = (int) Math.ceil(Math.sqrt(inner * inner - py * py));
-				l.add(y); l.add(-xo); l.add(-xi);
-				l.add(y); l.add(xi); l.add(xo);
-			}
-		}
-		return toArray(l);
-	}
-
-	private static void drawRuns(GuiGraphicsExtractor g, int[] runs, int color) {
-		for (int i = 0; i < runs.length; i += 3) {
-			g.fill(runs[i + 1], runs[i], runs[i + 2], runs[i] + 1, color);
-		}
-	}
-
-	private static int[] toArray(List<Integer> l) {
-		int[] a = new int[l.size()];
-		for (int i = 0; i < a.length; i++) a[i] = l.get(i);
-		return a;
 	}
 
 	// ---- Easing & colour helpers ----
