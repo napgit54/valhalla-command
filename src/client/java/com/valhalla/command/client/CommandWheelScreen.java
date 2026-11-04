@@ -26,7 +26,7 @@ public class CommandWheelScreen extends Screen {
 			new ItemStack(Items.IRON_AXE),      // Charge
 			new ItemStack(Items.IRON_SWORD),    // Attack
 			new ItemStack(Items.SHIELD),        // Defend
-			new ItemStack(Items.WHITE_BANNER),  // Hold
+			new ItemStack(Items.ANVIL),         // Hold
 			new ItemStack(Items.LEATHER_BOOTS)  // Retreat
 	};
 	private static final int SEGMENTS = COMMANDS.length;
