@@ -4,6 +4,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.valhalla.command.entity.ModEntities;
 import com.valhalla.command.entity.VikingEntity;
 import com.valhalla.command.item.ModItems;
+import com.valhalla.command.network.RavenOrderPayload;
 import com.valhalla.command.network.VikingActionPayload;
 import com.valhalla.command.network.Orders;
 import com.valhalla.command.network.WheelCommandPayload;
@@ -40,6 +41,11 @@ public class ValhallaCommand implements ModInitializer {
 		// ---- Packets ----
 		PayloadTypeRegistry.serverboundPlay().register(WheelCommandPayload.TYPE, WheelCommandPayload.CODEC);
 		PayloadTypeRegistry.serverboundPlay().register(VikingActionPayload.TYPE, VikingActionPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(RavenOrderPayload.TYPE, RavenOrderPayload.CODEC);
+		ServerPlayNetworking.registerGlobalReceiver(RavenOrderPayload.TYPE,
+				(payload, context) -> context.player().level().getServer().execute(
+						() -> Orders.raven(context.player(), payload.targets(), payload.hasArea(),
+								new net.minecraft.world.phys.Vec3(payload.x(), payload.y(), payload.z()))));
 
 		ServerPlayNetworking.registerGlobalReceiver(WheelCommandPayload.TYPE,
 				(payload, context) -> context.player().level().getServer().execute(

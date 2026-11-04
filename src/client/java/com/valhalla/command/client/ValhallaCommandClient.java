@@ -30,6 +30,7 @@ public class ValhallaCommandClient implements ClientModInitializer {
 		AttackTracker.register();
 
 		TeamHud.register();
+		RavenMarks.register();
 
 		// Right click a Viking: hire wheel (unhired) or manage wheel (your own)
 		VikingEntity.openWheel = (viking, mine) -> {

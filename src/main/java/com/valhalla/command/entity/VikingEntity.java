@@ -15,6 +15,7 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
@@ -38,6 +39,7 @@ import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -90,6 +92,16 @@ public class VikingEntity extends PathfinderMob {
 	private boolean orderRetreat;
 	private int orderTicks;
 
+	// Hold / Defend a position
+	private @Nullable Vec3 holdPos;
+	private boolean defending;
+
+	// Raven's Eye: marked targets and/or a marked area
+	private final List<Integer> ravenTargets = new ArrayList<>();
+	private @Nullable Vec3 ravenArea;
+	private int ravenTicks;
+	private boolean ravenMarched;
+
 	public VikingEntity(EntityType<? extends VikingEntity> type, Level level) {
 		super(type, level);
 		this.formationAngle = (float) (this.getRandom().nextFloat() * Math.PI * 2);
@@ -100,7 +112,8 @@ public class VikingEntity extends PathfinderMob {
 				.add(Attributes.MAX_HEALTH, 22)
 				.add(Attributes.MOVEMENT_SPEED, 0.26)
 				.add(Attributes.ATTACK_DAMAGE, 1.5)
-				.add(Attributes.FOLLOW_RANGE, 16);
+				.add(Attributes.FOLLOW_RANGE, 16)
+				.add(Attributes.FALL_DAMAGE_MULTIPLIER, 0); // Vikings never take fall damage
 	}
 
 	// =====================================================================
@@ -220,14 +233,17 @@ public class VikingEntity extends PathfinderMob {
 		this.goalSelector.addGoal(5, new RandomStrollGoal(this, 0.8) {
 			@Override
 			public boolean canUse() {
-				return !following && hornTicks == 0 && super.canUse();
+				return !following && holdPos == null && orderDest == null && hornTicks == 0 && super.canUse();
 			}
 		});
 		this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8f));
 		this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
 
 		this.targetSelector.addGoal(1, new HurtByTargetGoal(this, VikingEntity.class));
-		this.targetSelector.addGoal(2, new GuardOwnerGoal());
+		this.targetSelector.addGoal(2, new RavenTargetGoal());
+		this.targetSelector.addGoal(3, new DefendAreaGoal());
+		this.targetSelector.addGoal(4, new GuardOwnerGoal());
+		this.goalSelector.addGoal(4, new HoldPositionGoal());
 	}
 
 	/** Never turn on our own chief or fellow warriors on the same side. */
@@ -356,7 +372,28 @@ public class VikingEntity extends PathfinderMob {
 	public boolean isFollowing() { return following; }
 	public void setFollowing(boolean following) {
 		this.following = following;
-		if (following) orderDest = null;
+		if (following) { orderDest = null; holdPos = null; }
+	}
+
+	/** Hold this spot. Defend = also attack monsters that come near it. */
+	public void orderHold(boolean defend) {
+		this.following = false;
+		this.orderDest = null;
+		this.holdPos = this.position();
+		this.defending = defend;
+	}
+
+	/** Raven's Eye orders: hunt these entities, and/or clear monsters around this spot. */
+	public void setRavenOrders(List<Integer> targets, @Nullable Vec3 area) {
+		this.ravenTargets.clear();
+		this.ravenTargets.addAll(targets);
+		this.ravenArea = area;
+		this.ravenTicks = 20 * 120;
+		this.ravenMarched = false;
+		this.holdPos = null;
+		this.orderDest = null;
+		this.following = false;
+		this.setTarget(null);
 	}
 
 	/** Charge (fight on the way if attacked) or retreat (ignore enemies) to a spot. */
@@ -365,6 +402,7 @@ public class VikingEntity extends PathfinderMob {
 		this.orderDest = dest;
 		this.orderRetreat = retreat;
 		this.orderTicks = 20 * 40;
+		this.holdPos = null;
 		if (retreat) this.setTarget(null);
 	}
 
@@ -472,6 +510,122 @@ public class VikingEntity extends PathfinderMob {
 		@Override
 		public boolean canContinueToUse() {
 			return false;
+		}
+	}
+
+	/** Raven's Eye: go after marked targets, then clear the marked area of monsters. */
+	private class RavenTargetGoal extends Goal {
+		private @Nullable LivingEntity pick;
+
+		RavenTargetGoal() {
+			this.setFlags(EnumSet.of(Goal.Flag.TARGET));
+		}
+
+		@Override
+		public boolean canUse() {
+			if (ravenTicks <= 0) return false;
+			ravenTicks--;
+			if (isRetreating() || (getTarget() != null && getTarget().isAlive())) return false;
+			pick = null;
+			double best = Double.MAX_VALUE;
+			ravenTargets.removeIf(id -> !(level().getEntity(id) instanceof LivingEntity e) || !e.isAlive());
+			for (int id : ravenTargets) {
+				if (level().getEntity(id) instanceof LivingEntity e) {
+					double d = distanceToSqr(e);
+					if (d < best) { best = d; pick = e; }
+				}
+			}
+			if (pick == null && ravenArea != null) {
+				Vec3 a = ravenArea;
+				for (LivingEntity e : level().getEntitiesOfClass(LivingEntity.class,
+						new net.minecraft.world.phys.AABB(a, a).inflate(12),
+						e -> e.isAlive() && e.getType().getCategory() == MobCategory.MONSTER)) {
+					double d = distanceToSqr(e);
+					if (d < best) { best = d; pick = e; }
+				}
+				if (pick == null && !ravenMarched) {
+					ravenMarched = true;
+					Vec3 keep = ravenArea;
+					orderMove(keep, false); // march to the area
+					ravenTicks = Math.max(ravenTicks, 20 * 60);
+				}
+			}
+			if (pick == null && ravenTargets.isEmpty() && (ravenArea == null || ravenMarched && orderDest == null)) {
+				ravenTicks = 0;
+				ravenArea = null;
+			}
+			return pick != null;
+		}
+
+		@Override
+		public void start() {
+			setTarget(pick);
+		}
+
+		@Override
+		public boolean canContinueToUse() {
+			return false;
+		}
+	}
+
+	/** Defend order: attack monsters near the held spot. */
+	private class DefendAreaGoal extends Goal {
+		private @Nullable LivingEntity pick;
+
+		DefendAreaGoal() {
+			this.setFlags(EnumSet.of(Goal.Flag.TARGET));
+		}
+
+		@Override
+		public boolean canUse() {
+			if (holdPos == null || !defending || getTarget() != null || tickCount % 10 != 0) return false;
+			Vec3 h = holdPos;
+			pick = null;
+			double best = Double.MAX_VALUE;
+			for (LivingEntity e : level().getEntitiesOfClass(LivingEntity.class,
+					new net.minecraft.world.phys.AABB(h, h).inflate(12),
+					e -> e.isAlive() && e.getType().getCategory() == MobCategory.MONSTER)) {
+				double d = distanceToSqr(e);
+				if (d < best) { best = d; pick = e; }
+			}
+			return pick != null;
+		}
+
+		@Override
+		public void start() {
+			setTarget(pick);
+		}
+
+		@Override
+		public boolean canContinueToUse() {
+			return false;
+		}
+	}
+
+	/** Hold / Defend: walk back to the spot when pushed or after a fight. */
+	private class HoldPositionGoal extends Goal {
+		HoldPositionGoal() {
+			this.setFlags(EnumSet.of(Goal.Flag.MOVE));
+		}
+
+		@Override
+		public boolean canUse() {
+			return holdPos != null && getTarget() == null && orderDest == null && distanceToSqr(holdPos) > 3 * 3;
+		}
+
+		@Override
+		public boolean canContinueToUse() {
+			return holdPos != null && getTarget() == null && distanceToSqr(holdPos) > 1.5 * 1.5;
+		}
+
+		@Override
+		public void start() {
+			if (holdPos != null) getNavigation().moveTo(holdPos.x, holdPos.y, holdPos.z, 1.1);
+		}
+
+		@Override
+		public void stop() {
+			getNavigation().stop();
 		}
 	}
 

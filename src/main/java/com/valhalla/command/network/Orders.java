@@ -74,8 +74,35 @@ public final class Orders {
 				army.forEach(v -> v.setTarget(target));
 				tell(player, "To battle! " + army.size() + " warriors attack.");
 			}
-			default -> tell(player, "That order is coming soon.");
+			case HOLD -> {
+				army.forEach(v -> v.orderHold(false));
+				tell(player, "Hold this ground!");
+			}
+			case DEFEND -> {
+				army.forEach(v -> v.orderHold(true));
+				tell(player, "Defend this spot!");
+			}
+			default -> {}
 		}
+	}
+
+	/** Raven's Eye: marked entities and/or a marked area. */
+	public static void raven(ServerPlayer player, List<Integer> targets, boolean hasArea, Vec3 area) {
+		List<VikingEntity> army = player.level().getEntitiesOfClass(VikingEntity.class,
+				player.getBoundingBox().inflate(96), v -> v.isAlive() && v.isOwnedBy(player));
+		if (army.isEmpty()) {
+			tell(player, "You have no warriors nearby.");
+			return;
+		}
+		// Never let the raven mark your own warband or yourself
+		List<Integer> clean = targets.stream().filter(id -> {
+			var e = player.level().getEntity(id);
+			return e != null && e != player && !(e instanceof VikingEntity v && v.isOwnedBy(player));
+		}).limit(32).toList();
+		Vec3 a = hasArea && area.distanceToSqr(player.position()) < 128 * 128 ? area : null;
+		if (clean.isEmpty() && a == null) return;
+		army.forEach(v -> v.setRavenOrders(clean, a));
+		tell(player, "The ravens have spoken. " + army.size() + " warriors hunt.");
 	}
 
 	private static void tell(ServerPlayer player, String msg) {

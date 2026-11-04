@@ -32,7 +32,10 @@ public final class TeamHud {
 		List<VikingEntity> team = mc.level.getEntitiesOfClass(VikingEntity.class,
 				mc.player.getBoundingBox().inflate(96), v -> v.isAlive() && v.isHired() && me.equals(v.getOwnerString()));
 		if (team.isEmpty()) return;
-		team.sort(Comparator.comparingDouble(v -> v.distanceToSqr(mc.player)));
+		// Highest level at the top; stable order so rows don't jump around
+		team.sort(Comparator.comparingInt(VikingEntity::getVikingLevel).reversed()
+				.thenComparing(v -> v.getCustomName() != null ? v.getCustomName().getString() : "")
+				.thenComparingInt(VikingEntity::getId));
 
 		int x = 4, y = 4;
 		int shown = Math.min(MAX_ROWS, team.size());

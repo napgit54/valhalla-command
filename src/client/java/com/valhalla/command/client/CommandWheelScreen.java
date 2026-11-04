@@ -41,7 +41,7 @@ public class CommandWheelScreen extends Screen {
 			new ItemStack(Items.LEATHER_BOOTS)  // Retreat
 	};
 	/** These commands only work during a fight; greyed out otherwise. */
-	private static final boolean[] NEEDS_FIGHT = { false, true, false, true, true, true };
+	private static final boolean[] NEEDS_FIGHT = { false, false, false, false, false, false };
 
 	// ---- Manage mode (your own Viking): Aid on the right, Kick at the bottom ----
 	private static final int MANAGE_AID = 1, MANAGE_KICK = 3;
@@ -88,6 +88,7 @@ public class CommandWheelScreen extends Screen {
 	private long lastFrame = System.nanoTime();
 	private final float[] hover = new float[SEGMENTS];
 	private int hovered = -1;
+	private boolean openRaven; // Attack opens Raven's Eye after the wheel closes
 
 	/** The normal command wheel. */
 	public CommandWheelScreen() {
@@ -141,7 +142,7 @@ public class CommandWheelScreen extends Screen {
 		float openMs = (now - openedAt) / 1_000_000f;
 		float closeT = closingAt < 0 ? 0f : clamp01((now - closingAt) / 1_000_000f / CLOSE_MS);
 		if (closingAt >= 0 && closeT >= 1f) {
-			this.minecraft.gui.setScreen(null);
+			this.minecraft.gui.setScreen(openRaven ? new RavenEyeScreen() : null);
 			return;
 		}
 
@@ -271,6 +272,8 @@ public class CommandWheelScreen extends Screen {
 		} else if (mode == Mode.MANAGE) {
 			int action = index == MANAGE_KICK ? VikingEntity.ACTION_KICK : VikingEntity.ACTION_AID;
 			ClientPlayNetworking.send(new VikingActionPayload(targetId, action));
+		} else if (index == 2) { // Attack
+			openRaven = true;
 		} else {
 			ClientPlayNetworking.send(new WheelCommandPayload(index));
 		}
