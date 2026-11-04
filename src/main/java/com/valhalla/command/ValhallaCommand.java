@@ -19,7 +19,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +45,7 @@ public class ValhallaCommand implements ModInitializer {
 
 		// ---- Vikings replace villagers ----
 		ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {
-			if (entity.getType() == EntityType.VILLAGER) {
+			if (entity.getType() == EntityTypes.VILLAGER) {
 				level.getServer().execute(() -> replaceVillager(entity, level));
 			}
 		});
