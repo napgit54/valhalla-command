@@ -4,6 +4,7 @@ import com.valhalla.command.entity.VikingEntity;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
 
@@ -23,9 +24,45 @@ public final class Orders {
 
 		switch (command) {
 			case FOLLOW -> {
-				boolean anyIdle = army.stream().anyMatch(v -> !v.isFollowing());
-				army.forEach(v -> v.setFollowing(anyIdle));
-				tell(player, anyIdle ? "Your warriors follow you." : "Your warriors stand down.");
+				// Only warriors within 20 blocks hear the call
+				List<VikingEntity> near = army.stream().filter(v -> v.distanceToSqr(player) <= 20 * 20).toList();
+				if (near.isEmpty()) {
+					tell(player, "No warriors within 20 blocks.");
+					return;
+				}
+				boolean anyIdle = near.stream().anyMatch(v -> !v.isFollowing());
+				near.forEach(v -> v.setFollowing(anyIdle));
+				tell(player, anyIdle ? near.size() + " warriors follow you." : "Your warriors stand down.");
+			}
+			case CHARGE -> {
+				// Charge to the crosshair, up to 50 blocks
+				Vec3 dest = player.pick(50, 1f, false).getLocation();
+				for (VikingEntity v : army) {
+					double ox = (v.getRandom().nextDouble() - 0.5) * 4, oz = (v.getRandom().nextDouble() - 0.5) * 4;
+					v.orderMove(dest.add(ox, 0, oz), false);
+				}
+				tell(player, "Charge!");
+			}
+			case RETREAT -> {
+				// Run away from the fight (or from where you're looking), up to 80 blocks
+				Vec3 center = Vec3.ZERO, threat = Vec3.ZERO;
+				int threats = 0;
+				for (VikingEntity v : army) {
+					center = center.add(v.position());
+					if (v.getTarget() != null) { threat = threat.add(v.getTarget().position()); threats++; }
+				}
+				center = center.scale(1.0 / army.size());
+				Vec3 away = threats > 0
+						? center.subtract(threat.scale(1.0 / threats))
+						: player.getLookAngle().scale(-1);
+				away = new Vec3(away.x, 0, away.z);
+				if (away.lengthSqr() < 1.0E-4) away = player.getLookAngle().scale(-1);
+				away = away.normalize().scale(80);
+				for (VikingEntity v : army) {
+					double ox = (v.getRandom().nextDouble() - 0.5) * 6, oz = (v.getRandom().nextDouble() - 0.5) * 6;
+					v.orderMove(v.position().add(away).add(ox, 0, oz), true);
+				}
+				tell(player, "Fall back!");
 			}
 			case ATTACK -> {
 				LivingEntity target = player.getLastHurtMob();

@@ -4,15 +4,17 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.valhalla.command.entity.ModEntities;
 import com.valhalla.command.entity.VikingEntity;
 import com.valhalla.command.item.ModItems;
-import com.valhalla.command.network.HirePayload;
+import com.valhalla.command.network.VikingActionPayload;
 import com.valhalla.command.network.Orders;
 import com.valhalla.command.network.WheelCommandPayload;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.ChatFormatting;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -20,6 +22,9 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,14 +39,28 @@ public class ValhallaCommand implements ModInitializer {
 
 		// ---- Packets ----
 		PayloadTypeRegistry.serverboundPlay().register(WheelCommandPayload.TYPE, WheelCommandPayload.CODEC);
-		PayloadTypeRegistry.serverboundPlay().register(HirePayload.TYPE, HirePayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(VikingActionPayload.TYPE, VikingActionPayload.CODEC);
 
 		ServerPlayNetworking.registerGlobalReceiver(WheelCommandPayload.TYPE,
 				(payload, context) -> context.player().level().getServer().execute(
 						() -> Orders.handle(context.player(), payload.command())));
-		ServerPlayNetworking.registerGlobalReceiver(HirePayload.TYPE,
+		ServerPlayNetworking.registerGlobalReceiver(VikingActionPayload.TYPE,
 				(payload, context) -> context.player().level().getServer().execute(
-						() -> handleHire(context.player(), payload.entityId())));
+						() -> handleAction(context.player(), payload.entityId(), payload.action())));
+
+		// ---- Deaths: fallen warriors, and XP for the killer ----
+		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+			if (entity instanceof VikingEntity fallen && fallen.isHired()) {
+				Player o = fallen.getOwnerPlayer();
+				if (o instanceof ServerPlayer sp) {
+					sp.sendSystemMessage(Component.literal(fallen.displayName().replace(" (Lvl", " has fallen! (Lvl"))
+							.withStyle(ChatFormatting.RED));
+				}
+			}
+			if (source.getEntity() instanceof VikingEntity killer && killer.isHired() && killer != entity) {
+				killer.addXp(Math.max(1, (int) Math.ceil(entity.getMaxHealth() / 4f)));
+			}
+		});
 
 		// ---- Vikings replace villagers ----
 		ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {
@@ -94,15 +113,50 @@ public class ValhallaCommand implements ModInitializer {
 		level.addFreshEntity(viking);
 	}
 
-	private static void handleHire(ServerPlayer player, int entityId) {
+	private static void handleAction(ServerPlayer player, int entityId, int action) {
 		if (!(player.level().getEntity(entityId) instanceof VikingEntity viking)) return;
-		if (viking.isHired() || !viking.isAlive() || viking.distanceToSqr(player) > 10 * 10) return;
-		int price = viking.getPrice();
-		if (!ModItems.takeHacksilver(player, price)) {
-			player.sendSystemMessage(Component.literal("You need " + price + " hacksilver to hire this warrior."), true);
-			return;
+		if (!viking.isAlive() || viking.distanceToSqr(player) > 10 * 10) return;
+
+		switch (action) {
+			case VikingEntity.ACTION_HIRE -> {
+				if (viking.isHired()) return;
+				int price = viking.getPrice();
+				if (!ModItems.takeHacksilver(player, price)) {
+					player.sendSystemMessage(Component.literal("You need " + price + " hacksilver to hire this warrior."), true);
+					return;
+				}
+				viking.hire(player);
+				player.sendSystemMessage(Component.literal(viking.displayName() + " has joined your warband!")
+						.withStyle(ChatFormatting.GREEN));
+			}
+			case VikingEntity.ACTION_KICK -> {
+				if (!viking.isOwnedBy(player)) return;
+				String name = viking.displayName();
+				viking.dismiss();
+				player.sendSystemMessage(Component.literal("You removed " + name + " from your team.")
+						.withStyle(ChatFormatting.YELLOW));
+			}
+			case VikingEntity.ACTION_AID -> {
+				if (!viking.isOwnedBy(player)) return;
+				if (!takeOne(player, Items.GOLDEN_APPLE)) return;
+				if (!viking.startAid()) {
+					player.getInventory().add(new ItemStack(Items.GOLDEN_APPLE)); // busy, give it back
+				}
+			}
+			default -> {}
 		}
-		viking.hire(player);
-		player.sendSystemMessage(Component.literal(viking.getName().getString() + " has joined your warband!"), true);
+	}
+
+	private static boolean takeOne(ServerPlayer player, net.minecraft.world.item.Item item) {
+		var inv = player.getInventory();
+		for (int i = 0; i < inv.getContainerSize(); i++) {
+			ItemStack stack = inv.getItem(i);
+			if (stack.is(item)) {
+				stack.shrink(1);
+				inv.setChanged();
+				return true;
+			}
+		}
+		return false;
 	}
 }

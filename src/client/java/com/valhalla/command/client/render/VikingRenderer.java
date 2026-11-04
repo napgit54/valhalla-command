@@ -8,7 +8,9 @@ import net.minecraft.client.model.HumanoidModel;
 import net.minecraft.client.model.geom.ModelLayers;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.entity.ArmorModelSet;
 import net.minecraft.client.renderer.entity.HumanoidMobRenderer;
+import net.minecraft.client.renderer.entity.layers.HumanoidArmorLayer;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -29,6 +31,10 @@ public class VikingRenderer extends HumanoidMobRenderer<VikingEntity, VikingRend
 
 	public VikingRenderer(EntityRendererProvider.Context context) {
 		super(context, new HumanoidModel<>(context.bakeLayer(ModelLayers.PLAYER)), 0.5f);
+		// Show the armour they wear
+		this.addLayer(new HumanoidArmorLayer<>(this,
+				ArmorModelSet.bake(ModelLayers.PLAYER_ARMOR, context.getModelSet(), HumanoidModel::new),
+				context.getEquipmentRenderer()));
 	}
 
 	@Override
@@ -43,6 +49,8 @@ public class VikingRenderer extends HumanoidMobRenderer<VikingEntity, VikingRend
 		state.hired = entity.isHired();
 		state.price = entity.getPrice();
 		state.vikingLevel = entity.getVikingLevel();
+		// Raise the horn to the mouth while blowing it
+		if (entity.isBlowingHorn()) state.rightArmPose = HumanoidModel.ArmPose.TOOT_HORN;
 		if (state.nameTagAttachment == null) {
 			state.nameTagAttachment = entity.getAttachments().getNullable(EntityAttachment.NAME_TAG, 0, entity.getYRot(partialTick));
 		}

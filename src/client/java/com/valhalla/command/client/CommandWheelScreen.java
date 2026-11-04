@@ -4,7 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.valhalla.command.ValhallaCommand;
 import com.valhalla.command.entity.VikingEntity;
 import com.valhalla.command.item.ModItems;
-import com.valhalla.command.network.HirePayload;
+import com.valhalla.command.network.VikingActionPayload;
 import com.valhalla.command.network.WheelCommandPayload;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -26,7 +26,7 @@ import org.lwjgl.glfw.GLFW;
  * Each section is its own texture (cut from the wheel artwork) so it can animate on its own.
  */
 public class CommandWheelScreen extends Screen {
-	public enum Mode { COMMAND, HIRE }
+	public enum Mode { COMMAND, HIRE, MANAGE }
 
 	private static final int SEGMENTS = 6;
 
@@ -43,17 +43,22 @@ public class CommandWheelScreen extends Screen {
 	/** These commands only work during a fight; greyed out otherwise. */
 	private static final boolean[] NEEDS_FIGHT = { false, true, false, true, true, true };
 
+	// ---- Manage mode (your own Viking): Aid on the right, Kick at the bottom ----
+	private static final int MANAGE_AID = 1, MANAGE_KICK = 3;
+
 	// ---- Textures (512x512, all aligned to the same canvas) ----
 	private static final int TEX = 512;
 	private static final Identifier[] SEG_TEX = new Identifier[SEGMENTS];
 	private static final Identifier[] SEG_HOVER_TEX = new Identifier[SEGMENTS];
 	private static final Identifier[] SEG_GREY_TEX = new Identifier[SEGMENTS];
+	private static final Identifier[] SEG_RED_TEX = new Identifier[SEGMENTS];
 	private static final Identifier CENTER_TEX = tex("center");
 	static {
 		for (int i = 0; i < SEGMENTS; i++) {
 			SEG_TEX[i] = tex("seg" + i);
 			SEG_HOVER_TEX[i] = tex("seg" + i + "_hover");
 			SEG_GREY_TEX[i] = tex("seg" + i + "_grey");
+			SEG_RED_TEX[i] = tex("seg" + i + "_hover_red");
 		}
 	}
 
@@ -90,12 +95,15 @@ public class CommandWheelScreen extends Screen {
 	}
 
 	public CommandWheelScreen(Mode mode, int targetId) {
-		super(Component.literal(mode == Mode.HIRE ? "Hire" : "Command Wheel"));
+		super(Component.literal(mode == Mode.COMMAND ? "Command Wheel" : "Viking"));
 		this.mode = mode;
 		this.targetId = targetId;
 		if (mode == Mode.HIRE) {
 			this.labels = new String[] { "Hire", "", "", "", "", "" };
 			this.icons = new ItemStack[] { new ItemStack(ModItems.HACKSILVER), null, null, null, null, null };
+		} else if (mode == Mode.MANAGE) {
+			this.labels = new String[] { "", "Aid", "", "Kick", "", "" };
+			this.icons = new ItemStack[] { null, new ItemStack(Items.GOLDEN_APPLE), null, new ItemStack(Items.BARRIER), null, null };
 		} else {
 			this.labels = COMMAND_LABELS;
 			this.icons = COMMAND_ICONS;
@@ -174,7 +182,8 @@ public class CommandWheelScreen extends Screen {
 
 			// Normal section (or greyed out), with the brighter hover version faded in on top
 			drawTex(graphics, disabled ? SEG_GREY_TEX[i] : SEG_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha));
-			if (h > 0.01f) drawTex(graphics, SEG_HOVER_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha * h));
+			Identifier hoverTex = (mode == Mode.MANAGE && i == MANAGE_KICK) ? SEG_RED_TEX[i] : SEG_HOVER_TEX[i];
+			if (h > 0.01f) drawTex(graphics, hoverTex, half, size, withAlpha(0xFFFFFFFF, alpha * h));
 
 			// Icon with its name underneath, in the Minecraft font
 			ItemStack icon = icons[i];
@@ -234,7 +243,19 @@ public class CommandWheelScreen extends Screen {
 			return v == null || v.isHired() || this.minecraft.player == null
 					|| ModItems.countHacksilver(this.minecraft.player) < v.getPrice();
 		}
+		if (mode == Mode.MANAGE) {
+			if (i == MANAGE_KICK) return target() == null;
+			if (i == MANAGE_AID) return target() == null || this.minecraft.player == null
+					|| !hasItem(Items.GOLDEN_APPLE);
+			return true;
+		}
 		return NEEDS_FIGHT[i] && !AttackTracker.isAttacking();
+	}
+
+	private boolean hasItem(net.minecraft.world.item.Item item) {
+		var inv = this.minecraft.player.getInventory();
+		for (int i = 0; i < inv.getContainerSize(); i++) if (inv.getItem(i).is(item)) return true;
+		return false;
 	}
 
 	private @Nullable VikingEntity target() {
@@ -246,7 +267,10 @@ public class CommandWheelScreen extends Screen {
 	private void onSelect(int index) {
 		if (index < 0) return;
 		if (mode == Mode.HIRE) {
-			ClientPlayNetworking.send(new HirePayload(targetId));
+			ClientPlayNetworking.send(new VikingActionPayload(targetId, VikingEntity.ACTION_HIRE));
+		} else if (mode == Mode.MANAGE) {
+			int action = index == MANAGE_KICK ? VikingEntity.ACTION_KICK : VikingEntity.ACTION_AID;
+			ClientPlayNetworking.send(new VikingActionPayload(targetId, action));
 		} else {
 			ClientPlayNetworking.send(new WheelCommandPayload(index));
 		}
@@ -254,7 +278,7 @@ public class CommandWheelScreen extends Screen {
 
 	/** The command wheel stays open while its key is held; the hire wheel while right click is held. */
 	private boolean isHoldKeyDown() {
-		KeyMapping mapping = mode == Mode.HIRE ? this.minecraft.options.keyUse : ValhallaCommandClient.WHEEL_KEY;
+		KeyMapping mapping = mode == Mode.COMMAND ? ValhallaCommandClient.WHEEL_KEY : this.minecraft.options.keyUse;
 		InputConstants.Key key = KeyMappingHelper.getBoundKeyOf(mapping);
 		long handle = this.minecraft.getWindow().handle();
 		int code = key.getValue();

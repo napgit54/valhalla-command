@@ -29,11 +29,14 @@ public class ValhallaCommandClient implements ClientModInitializer {
 		EntityRenderers.register(ModEntities.VIKING, VikingRenderer::new);
 		AttackTracker.register();
 
-		// Right click on a Viking for hire opens the hire wheel
-		VikingEntity.openHireScreen = viking -> {
+		TeamHud.register();
+
+		// Right click a Viking: hire wheel (unhired) or manage wheel (your own)
+		VikingEntity.openWheel = (viking, mine) -> {
 			Minecraft mc = Minecraft.getInstance();
 			if (mc.gui.screen() == null) {
-				mc.gui.setScreen(new CommandWheelScreen(CommandWheelScreen.Mode.HIRE, viking.getId()));
+				mc.gui.setScreen(new CommandWheelScreen(
+						mine ? CommandWheelScreen.Mode.MANAGE : CommandWheelScreen.Mode.HIRE, viking.getId()));
 			}
 		};
 
