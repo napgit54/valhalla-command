@@ -1,0 +1,21 @@
+{
+	"schemaVersion": 1,
+	"id": "valhallacommand",
+	"version": "${version}",
+	"name": "Valhalla Command",
+	"description": "Command your Viking army. Hold the command key to open the war wheel.",
+	"authors": ["You"],
+	"license": "All-Rights-Reserved",
+	"icon": "assets/valhallacommand/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["com.valhalla.command.ValhallaCommand"],
+		"client": ["com.valhalla.command.client.ValhallaCommandClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
