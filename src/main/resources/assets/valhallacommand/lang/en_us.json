@@ -1,5 +1,6 @@
 {
 	"key.category.valhallacommand.main": "Valhalla Command",
 	"key.valhallacommand.command_wheel": "Open Command Wheel (hold)",
-	"entity.valhallacommand.viking": "Viking"
+	"entity.valhallacommand.viking": "Viking",
+	"item.valhallacommand.hacksilver": "Hacksilver"
 }

@@ -4,6 +4,8 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.valhalla.command.ValhallaCommand;
 import com.valhalla.command.client.render.VikingRenderer;
 import com.valhalla.command.entity.ModEntities;
+import com.valhalla.command.entity.VikingEntity;
+import net.minecraft.client.Minecraft;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -26,6 +28,14 @@ public class ValhallaCommandClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		EntityRenderers.register(ModEntities.VIKING, VikingRenderer::new);
 		AttackTracker.register();
+
+		// Right click on a Viking for hire opens the hire wheel
+		VikingEntity.openHireScreen = viking -> {
+			Minecraft mc = Minecraft.getInstance();
+			if (mc.gui.screen() == null) {
+				mc.gui.setScreen(new CommandWheelScreen(CommandWheelScreen.Mode.HIRE, viking.getId()));
+			}
+		};
 
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			while (WHEEL_KEY.consumeClick()) {

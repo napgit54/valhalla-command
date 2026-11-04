@@ -2,9 +2,13 @@ package com.valhalla.command.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.valhalla.command.ValhallaCommand;
+import com.valhalla.command.entity.VikingEntity;
+import com.valhalla.command.item.ModItems;
+import com.valhalla.command.network.HirePayload;
 import com.valhalla.command.network.WheelCommandPayload;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.RenderPipelines;
@@ -12,18 +16,23 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * The radial command wheel. Opens while the wheel key is held, closes on release.
+ * The radial wheel. Two modes:
+ *  - COMMAND: hold the wheel key, give orders to your warband.
+ *  - HIRE: hold right click on a Viking for hire; only "Hire" is available.
  * Each section is its own texture (cut from the wheel artwork) so it can animate on its own.
  */
 public class CommandWheelScreen extends Screen {
-	// ---- Commands, clockwise from the top ----
-	public static final String[] COMMANDS = {
-			"Follow", "Charge", "Attack", "Defend", "Hold", "Retreat"
-	};
-	private static final ItemStack[] ICONS = {
+	public enum Mode { COMMAND, HIRE }
+
+	private static final int SEGMENTS = 6;
+
+	// ---- Command mode: clockwise from the top ----
+	private static final String[] COMMAND_LABELS = { "Follow", "Charge", "Attack", "Defend", "Hold", "Retreat" };
+	private static final ItemStack[] COMMAND_ICONS = {
 			new ItemStack(Items.LEAD),          // Follow
 			new ItemStack(Items.IRON_AXE),      // Charge
 			new ItemStack(Items.IRON_SWORD),    // Attack
@@ -31,7 +40,8 @@ public class CommandWheelScreen extends Screen {
 			new ItemStack(Items.ANVIL),         // Hold
 			new ItemStack(Items.LEATHER_BOOTS)  // Retreat
 	};
-	private static final int SEGMENTS = COMMANDS.length;
+	/** These commands only work during a fight; greyed out otherwise. */
+	private static final boolean[] NEEDS_FIGHT = { false, true, false, true, true, true };
 
 	// ---- Textures (512x512, all aligned to the same canvas) ----
 	private static final int TEX = 512;
@@ -47,18 +57,15 @@ public class CommandWheelScreen extends Screen {
 		}
 	}
 
-	/** These commands only work during a fight; greyed out otherwise. */
-	private static final boolean[] NEEDS_FIGHT = { false, true, false, true, true, true };
-	private static final float ICON_SCALE = 1.5f;
-	private static final int COLOR_TEXT_DISABLED = 0xFF8A8A8A;
-
 	// ---- Look & feel (sizes in GUI units) ----
 	private static final float WHEEL_SIZE = 190f;    // full diameter of the artwork
 	private static final float INNER_RADIUS = 30f;   // inside this = centre (no selection)
 	private static final float LABEL_RADIUS = 0.33f; // where icons sit, as a fraction of WHEEL_SIZE
+	private static final float ICON_SCALE = 1.5f;
 	private static final float HOVER_PUSH = 7f;
 	private static final float HOVER_GROW = 0.04f;
 	private static final int COLOR_TEXT = 0xFFFFFFFF;
+	private static final int COLOR_TEXT_DISABLED = 0xFF8A8A8A;
 
 	// ---- Animation timings (ms) ----
 	private static final float OPEN_MS = 220f;
@@ -66,14 +73,33 @@ public class CommandWheelScreen extends Screen {
 	private static final float STAGGER_MS = 28f;
 	private static final float HOVER_SPEED = 14f;
 
+	private final Mode mode;
+	private final int targetId; // the Viking being hired (HIRE mode)
+	private final String[] labels;
+	private final @Nullable ItemStack[] icons;
+
 	private final long openedAt = System.nanoTime();
 	private long closingAt = -1;
 	private long lastFrame = System.nanoTime();
 	private final float[] hover = new float[SEGMENTS];
 	private int hovered = -1;
 
+	/** The normal command wheel. */
 	public CommandWheelScreen() {
-		super(Component.literal("Command Wheel"));
+		this(Mode.COMMAND, -1);
+	}
+
+	public CommandWheelScreen(Mode mode, int targetId) {
+		super(Component.literal(mode == Mode.HIRE ? "Hire" : "Command Wheel"));
+		this.mode = mode;
+		this.targetId = targetId;
+		if (mode == Mode.HIRE) {
+			this.labels = new String[] { "Hire", "", "", "", "", "" };
+			this.icons = new ItemStack[] { new ItemStack(ModItems.HACKSILVER), null, null, null, null, null };
+		} else {
+			this.labels = COMMAND_LABELS;
+			this.icons = COMMAND_ICONS;
+		}
 	}
 
 	private static Identifier tex(String name) {
@@ -99,7 +125,7 @@ public class CommandWheelScreen extends Screen {
 		// Real pixels per GUI unit, so the artwork is drawn at full resolution
 		float scale = (float) this.minecraft.getWindow().getWidth() / Math.max(1, this.width);
 
-		if (closingAt < 0 && !isWheelKeyHeld()) {
+		if (closingAt < 0 && !isHoldKeyDown()) {
 			closingAt = now;
 			onSelect(hovered);
 		}
@@ -140,19 +166,19 @@ public class CommandWheelScreen extends Screen {
 			double mid = -Math.PI / 2 + i * step;
 			float push = (HOVER_PUSH * h + (1f - closeEase) * 10f) * scale;
 			float grow = s * (1f + HOVER_GROW * h);
+			boolean disabled = isDisabled(i);
 
 			pose.pushMatrix();
 			pose.translate((float) Math.cos(mid) * push, (float) Math.sin(mid) * push);
 			pose.scale(grow, grow);
-
-			boolean disabled = isDisabled(i);
 
 			// Normal section (or greyed out), with the brighter hover version faded in on top
 			drawTex(graphics, disabled ? SEG_GREY_TEX[i] : SEG_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha));
 			if (h > 0.01f) drawTex(graphics, SEG_HOVER_TEX[i], half, size, withAlpha(0xFFFFFFFF, alpha * h));
 
 			// Icon with its name underneath, in the Minecraft font
-			if (alpha > 0.6f) {
+			ItemStack icon = icons[i];
+			if (alpha > 0.6f && icon != null) {
 				float labelR = LABEL_RADIUS * size;
 				pose.translate((float) Math.cos(mid) * labelR, (float) Math.sin(mid) * labelR);
 				pose.scale(scale, scale); // back to GUI units
@@ -161,10 +187,10 @@ public class CommandWheelScreen extends Screen {
 				pose.translate(0f, -5f);
 				float iconScale = ICON_SCALE * (1f + 0.15f * h);
 				pose.scale(iconScale, iconScale);
-				graphics.fakeItem(ICONS[i], -8, -8);
+				graphics.fakeItem(icon, -8, -8);
 				pose.popMatrix();
 
-				String label = COMMANDS[i];
+				String label = labels[i];
 				int tw = this.font.width(label);
 				int base = disabled ? COLOR_TEXT_DISABLED : COLOR_TEXT;
 				int textColor = withAlpha(lerpColor(base, 0xFFFFF3C4, h), alpha);
@@ -191,28 +217,45 @@ public class CommandWheelScreen extends Screen {
 		g.blit(RenderPipelines.GUI_TEXTURED, id, -half, -half, 0f, 0f, size, size, TEX, TEX, TEX, TEX, color);
 	}
 
-	/** Which section the mouse points at, or -1 for the centre. */
+	/** Which section the mouse points at, or -1 for the centre or a greyed section. */
 	private int pickSegment(float x, float y) {
 		if (x * x + y * y < INNER_RADIUS * INNER_RADIUS) return -1;
 		double step = Math.PI * 2 / SEGMENTS;
 		double a = Math.atan2(y, x) + Math.PI / 2 + step / 2; // 0 = top, clockwise
 		a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
 		int seg = (int) (a / step) % SEGMENTS;
-		return isDisabled(seg) ? -1 : seg; // greyed sections can't be hovered or picked
+		return isDisabled(seg) ? -1 : seg;
 	}
 
-	private static boolean isDisabled(int i) {
+	private boolean isDisabled(int i) {
+		if (mode == Mode.HIRE) {
+			if (i != 0) return true;
+			VikingEntity v = target();
+			return v == null || v.isHired() || this.minecraft.player == null
+					|| ModItems.countHacksilver(this.minecraft.player) < v.getPrice();
+		}
 		return NEEDS_FIGHT[i] && !AttackTracker.isAttacking();
+	}
+
+	private @Nullable VikingEntity target() {
+		if (this.minecraft.level == null) return null;
+		return this.minecraft.level.getEntity(targetId) instanceof VikingEntity v ? v : null;
 	}
 
 	/** Called when the wheel closes. -1 means nothing was picked. */
 	private void onSelect(int index) {
 		if (index < 0) return;
-		ClientPlayNetworking.send(new WheelCommandPayload(index));
+		if (mode == Mode.HIRE) {
+			ClientPlayNetworking.send(new HirePayload(targetId));
+		} else {
+			ClientPlayNetworking.send(new WheelCommandPayload(index));
+		}
 	}
 
-	private boolean isWheelKeyHeld() {
-		InputConstants.Key key = KeyMappingHelper.getBoundKeyOf(ValhallaCommandClient.WHEEL_KEY);
+	/** The command wheel stays open while its key is held; the hire wheel while right click is held. */
+	private boolean isHoldKeyDown() {
+		KeyMapping mapping = mode == Mode.HIRE ? this.minecraft.options.keyUse : ValhallaCommandClient.WHEEL_KEY;
+		InputConstants.Key key = KeyMappingHelper.getBoundKeyOf(mapping);
 		long handle = this.minecraft.getWindow().handle();
 		int code = key.getValue();
 		if (code < 0) return false;
