@@ -10,6 +10,7 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -26,7 +27,7 @@ import java.util.Set;
  * Enter, Esc or the wheel key = send the ravens.
  */
 public class RavenEyeScreen extends Screen {
-	private static final double RANGE = 80;
+	private static final double RANGE = 50;
 	private static final float SNAP_PX = 48;
 	private static final int COLOR_HOSTILE = 0xFFE8D8C0;
 	private static final int COLOR_OTHER = 0x88FFFFFF;
@@ -67,7 +68,9 @@ public class RavenEyeScreen extends Screen {
 		candidates.addAll(this.minecraft.level.getEntitiesOfClass(LivingEntity.class,
 				this.minecraft.player.getBoundingBox().inflate(RANGE),
 				e -> e != this.minecraft.player && e.isAlive() && e.getType() != EntityTypes.ARMOR_STAND
-						&& !(e instanceof VikingEntity v && me.equals(v.getOwnerString()))));
+						&& !(e instanceof VikingEntity v && me.equals(v.getOwnerString()))
+						&& e.distanceToSqr(this.minecraft.player) <= RANGE * RANGE
+						&& !isCritter(e) && !isUnderground(e)));
 
 		// Snap to the closest bracket on screen
 		hovered = null;
@@ -99,6 +102,18 @@ public class RavenEyeScreen extends Screen {
 		g.text(this.font, count, this.width / 2 - this.font.width(count) / 2, 12, 0xFFE03C3C, true);
 
 		handleInput(mouseX, mouseY);
+	}
+
+	/** Bats, fish, squid and other little things aren't worth a raven. */
+	private static boolean isCritter(LivingEntity e) {
+		MobCategory c = e.getType().getCategory();
+		return c == MobCategory.AMBIENT || c == MobCategory.WATER_AMBIENT || c == MobCategory.UNDERGROUND_WATER_CREATURE;
+	}
+
+	/** More than a few blocks below the surface = in a cave. */
+	private boolean isUnderground(LivingEntity e) {
+		int surface = this.minecraft.level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, e.getBlockX(), e.getBlockZ());
+		return e.getY() < surface - 6;
 	}
 
 	private void drawBracket(GuiGraphicsExtractor g, LivingEntity e) {
@@ -136,10 +151,14 @@ public class RavenEyeScreen extends Screen {
 			} else {
 				// Mark the ground / water under the mouse
 				Vec3 from = Projector.camera();
-				Vec3 to = from.add(Projector.direction(mouseX, mouseY).scale(120));
+				Vec3 to = from.add(Projector.direction(mouseX, mouseY).scale(RANGE));
 				HitResult hit = this.minecraft.level.clip(new ClipContext(from, to,
 						ClipContext.Block.COLLIDER, ClipContext.Fluid.ANY, this.minecraft.player));
-				if (hit.getType() != HitResult.Type.MISS) area = hit.getLocation();
+				if (hit.getType() != HitResult.Type.MISS) {
+					Vec3 spot = hit.getLocation();
+					int surface = this.minecraft.level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, (int) Math.floor(spot.x), (int) Math.floor(spot.z));
+					if (spot.y >= surface - 6) area = spot; // no marking cave floors
+				}
 			}
 		}
 		if (right && !wasRight) {

@@ -97,9 +97,10 @@ public final class Orders {
 		// Never let the raven mark your own warband or yourself
 		List<Integer> clean = targets.stream().filter(id -> {
 			var e = player.level().getEntity(id);
-			return e != null && e != player && !(e instanceof VikingEntity v && v.isOwnedBy(player));
+			return e != null && e != player && e.distanceToSqr(player) <= 55 * 55
+					&& !(e instanceof VikingEntity v && v.isOwnedBy(player));
 		}).limit(32).toList();
-		Vec3 a = hasArea && area.distanceToSqr(player.position()) < 128 * 128 ? area : null;
+		Vec3 a = hasArea && area.distanceToSqr(player.position()) <= 55 * 55 ? area : null;
 		if (clean.isEmpty() && a == null) return;
 		army.forEach(v -> v.setRavenOrders(clean, a));
 		tell(player, "The ravens have spoken. " + army.size() + " warriors hunt.");
