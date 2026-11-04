@@ -27,7 +27,7 @@ public final class TeamHud {
 
 	private static void extract(GuiGraphicsExtractor g, DeltaTracker delta) {
 		Minecraft mc = Minecraft.getInstance();
-		if (mc.player == null || mc.level == null || mc.options.hideGui) return;
+		if (mc.player == null || mc.level == null) return;
 		String me = mc.player.getUUID().toString();
 		List<VikingEntity> team = mc.level.getEntitiesOfClass(VikingEntity.class,
 				mc.player.getBoundingBox().inflate(96), v -> v.isAlive() && v.isHired() && me.equals(v.getOwnerString()));
